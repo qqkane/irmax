@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Messenger Student Edition</title>
+    <style>
+        /* Простые стили, чтобы было удобно */
+        body { font-family: sans-serif; background: #f0f2f5; margin: 0; display: flex; justify-content: center; height: 100vh; }
+        .container { width: 800px; background: white; box-shadow: 0 0 10px rgba(0,0,0,0.1); display: flex; flex-direction: column; }
+        
+        /* Шапка */
+        .header { background: #4a76a8; color: white; padding: 15px; display: flex; justify-content: space-between; align-items: center; }
+        .header button { background: #e6e6e6; border: none; padding: 5px 10px; cursor: pointer; }
+
+        /* Основной лейаут */
+        .main { display: flex; flex: 1; overflow: hidden; }
+        
+        /* Список юзеров слева */
+        .sidebar { width: 250px; border-right: 1px solid #eee; overflow-y: auto; background: #fafafa; }
+        .user-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; }
+        .user-item:hover { background: #e6e6e6; }
+        .user-item.active { background: #d9e7f7; font-weight: bold; }
+
+        /* Чат справа */
+        .chat-area { flex: 1; display: flex; flex-direction: column; }
+        .messages { flex: 1; padding: 20px; overflow-y: auto; background: #fff; }
+        .message { margin-bottom: 15px; max-width: 70%; }
+        .message.my { margin-left: auto; text-align: right; }
+        .message .text { display: inline-block; padding: 10px 15px; border-radius: 15px; background: #e4e6eb; }
+        .message.my .text { background: #4a76a8; color: white; }
+        .message .meta { font-size: 0.75em; color: #888; margin-top: 5px; }
+
+        /* Форма отправки */
+        .input-area { padding: 15px; border-top: 1px solid #eee; display: flex; }
+        .input-area input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px; margin-right: 10px; }
+        .input-area button { padding: 10px 20px; background: #4a76a8; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        
+        /* Формы логина */
+        .auth-forms { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; }
+        .auth-box { width: 300px; padding: 20px; background: white; border-radius: 5px; box-shadow: 0 0 5px rgba(0,0,0,0.1); text-align: center; }
+        .auth-box input { width: 90%; padding: 10px; margin: 10px 0; }
+        .auth-box button { width: 100%; padding: 10px; background: #4a76a8; color: white; border: none; cursor: pointer; margin-top: 5px; }
+        .error { color: red; font-size: 0.9em; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- Шапка -->
+    <div class="header">
+        <h3>OwerMessage</h3>
+        <div id="userInfo" style="display:none;">
+            <span id="currentUsername"></span>
+            <button onclick="logout()">Выйти</button>
+        </div>
+    </div>
+
+    <!-- Формы входа/Регистрации -->
+    <div id="authScreen" class="auth-forms">
+        <div class="auth-box">
+            <h3>Вход / Регистрация</h3>
+            <input type="text" id="authLogin" placeholder="Логин">
+            <input type="password" id="authPass" placeholder="Пароль">
+            <button onclick="register()">Регистрация</button>
+            <button onclick="login()" style="background: #6ba853;">Войти</button>
+            <div id="authError" class="error"></div>
+        </div>
+    </div>
+
+    <!-- Основной экран мессенджера -->
+    <div id="chatScreen" class="main" style="display:none;">
+        <!-- Список юзеров -->
+        <div class="sidebar">
+            <h4 style="padding: 10px; margin: 0;">Контакты</h4>
+            <div id="usersList"></div>
+        </div>
+        
+        <!-- Область чата -->
+        <div class="chat-area">
+            <div id="messagesBox" class="messages">
+                <div style="text-align:center; color:#888; margin-top:50px;">Выберите собеседника слева</div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="msgInput" placeholder="Введите сообщение..." onkeypress="handleKey(event)">
+                <button onclick="sendMessage()">Отправить</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+
+    const API_URL = 'http://5.180.172.101:8000';
+    
+    let token = localStorage.getItem('token');
+    let myUsername = localStorage.getItem('username');
+    let currentPartner = null;
+    let socket = null;
+
+    // ==========================================
+    // Инициализация при загрузке страницы
+    // ==========================================
+    window.onload = function() {
+        if (token) {
+            // Если токен есть, сразу показываем чат
+            showChat();
+        } else {
+            showAuth();
+        }
+    };
+
+    // ==========================================
+    // Авторизация (HTTP запросы)
+    // ==========================================
+    async function register() {
+        const username = document.getElementById('authLogin').value;
+        const password = document.getElementById('authPass').value;
+        
+        try {
+            const resp = await fetch(`${API_URL}/api/register/`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const data = await resp.json();
+            if (resp.ok) {
+                saveToken(data.token, username);
+            } else {
+                showError(data.detail || "Ошибка регистрации");
+            }
+        } catch(e) { showError("Сервер недоступен"); }
+    }
+
+    async function login() {
+        const username = document.getElementById('authLogin').value;
+        const password = document.getElementById('authPass').value;
+
+        try {
+            const resp = await fetch(`${API_URL}/api/login/`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const data = await resp.json();
+            if (resp.ok) {
+                saveToken(data.token, username);
+            } else {
+                showError(data.detail || "Ошибка входа");
+            }
+        } catch(e) { showError("Сервер недоступен"); }
+    }
+
+    function saveToken(t, u) {
+        token = t;
+        myUsername = u;
+        localStorage.setItem('token', t);
+        localStorage.setItem('username', u);
+        showChat();
+    }
+
+    function logout() {
+        token = null; myUsername = null; currentPartner = null;
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        if(socket) socket.close(); // закрываем сокет
+        showAuth();
+    }
+
+    // ==========================================
+    // Логика Чата
+    // ==========================================
+    function showChat() {
+        document.getElementById('authScreen').style.display = 'none';
+        document.getElementById('chatScreen').style.display = 'flex';
+        document.getElementById('userInfo').style.display = 'block';
+        document.getElementById('currentUsername').innerText = myUsername;
+        
+        connectWebSocket();
+        loadUsers();
+    }
+
+    function showAuth() {
+        document.getElementById('authScreen').style.display = 'flex';
+        document.getElementById('chatScreen').style.display = 'none';
+        document.getElementById('userInfo').style.display = 'none';
+    }
+
+    function showError(msg) {
+        document.getElementById('authError').innerText = msg;
+    }
+
+    // Загрузка списка юзеров
+    async function loadUsers() {
+        const resp = await fetch(`${API_URL}/api/users/?token=${token}`);
+        const data = await resp.json();
+        const list = document.getElementById('usersList');
+        list.innerHTML = '';
+        
+        data.users.forEach(user => {
+            const div = document.createElement('div');
+            div.className = 'user-item';
+            div.innerText = user.username;
+            div.onclick = () => selectPartner(user.username);
+            list.appendChild(div);
+        });
+    }
+
+    // Выбор собеседника
+    async function selectPartner(partnerName) {
+        currentPartner = partnerName;
+        
+        // подсвечиваем активный диалог
+        document.querySelectorAll('.user-item').forEach(el => {
+            el.classList.remove('active');
+            if(el.innerText === partnerName) el.classList.add('active');
+        });
+
+        document.getElementById('msgInput').placeholder = `Писать ${partnerName}`;
+        
+        // грузим историю
+        const resp = await fetch(`${API_URL}/api/messages/?partner=${partnerName}&token=${token}`);
+        const data = await resp.json();
+        
+        const box = document.getElementById('messagesBox');
+        box.innerHTML = '';
+        
+        // отрисовываем сообщения
+        data.messages.forEach(msg => {
+            addMessageToUI(msg);
+        });
+        
+        // скролл вниз
+        box.scrollTop = box.scrollHeight;
+    }
+
+    // ==========================================
+    // WebSocket (Real-time)
+    // ==========================================
+    function connectWebSocket() {
+        // Важно: ws:// или wss:// (для https)
+        // Передаем токен в query параметре, как написано в main.py
+        const wsUrl = API_URL.replace('http', 'ws'); // подмена протокола
+        socket = new WebSocket(`${wsUrl}/ws/chat/?token=${token}`);
+
+        socket.onopen = function() {
+            console.log("WebSocket Connected");
+        };
+
+        socket.onmessage = function(event) {
+            // СЮДА ПРИХОДИТ СООБЩЕНИЕ ОТ СЕРВЕРА БЕЗ ОБНОВЛЕНИЯ
+            console.log("New WS Message", event.data);
+            const data = JSON.parse(event.data);
+            
+            // Если тип "new_message", обрабатываем
+            if (data.type === "new_message") {
+                const msg = data.data;
+                
+                // Если чат открыт с этим человеком -> рисуем
+                // msg.sender - это имя отправителя
+                if (currentPartner === msg.sender || currentPartner === msg.receiver) {
+                     // Добавляем проверку: если сообщение от меня (оптимистичная отрисовка могла сработать),
+                     // но лучше перерисовать или проверить id, чтобы дубликатов не было.
+                     // Для простоты пока просто добавим.
+                     
+                     // Но! Мы уже добавили сообщение в UI в функции sendMessage().
+                     // Тут мы добавляем ТОЛЬКО если сообщение ПРИШЛО ОТ ДРУГОГО.
+                     if (msg.sender !== myUsername) {
+                         addMessageToUI(msg);
+                     }
+                } else {
+                    // Если чат закрыт, можно показать уведомление (не делаю, чтоб не усложнять)
+                    console.log(`Message from ${msg.sender} but you are not in this chat`);
+                }
+            }
+        };
+
+        socket.onclose = function() {
+            console.log("WebSocket Disconnected");
+            // Можно добавить реконнект логику
+        };
+
+        socket.onerror = function(error) {
+            console.log("WebSocket Error", error);
+        };
+    }
+
+    // Отправка сообщения (HTTP POST)
+            async function sendMessage() {
+        const input = document.getElementById('msgInput');
+        const text = input.value;
+        if (!text || !currentPartner) return;
+
+        // --- ШАГ 1: Рисуем сообщение СРАЗУ (Оптимистичный UI) ---
+        // Мы не ждем ответа сервера, а сразу показываем текст
+        const tempId = 'temp-' + Date.now(); // Временный ID
+        addMessageToUI({
+            id: tempId,
+            sender: myUsername,
+            receiver: currentPartner,
+            content: text,
+            created_at: new Date().toISOString(),
+            is_read: false
+        });
+
+        // Очищаем поле и скроллим вниз
+        input.value = '';
+        const box = document.getElementById('messagesBox');
+        box.scrollTop = box.scrollHeight;
+
+        // --- ШАГ 2: Отправляем на сервер в фоне ---
+        try {
+            const resp = await fetch(`${API_URL}/api/messages/send/?token=${token}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    receiver: currentPartner,
+                    content: text
+                })
+            });
+            
+            if (!resp.ok) {
+                console.error("Ошибка отправки, сервер вернул ошибку");
+                // Тут можно покрасить сообщение в красный, если сервер упал
+            }
+        } catch(e) {
+            console.error("Сеть недоступна", e);
+        }
+    }
+
+    // Функция отрисовки одного сообщения
+    function addMessageToUI(msg) {
+        const box = document.getElementById('messagesBox');
+        const div = document.createElement('div');
+        
+        // Если sender == я, то класс my (справа), иначе слева
+        const isMe = msg.sender === myUsername;
+        div.className = `message ${isMe ? 'my' : ''}`;
+        
+        // Форматируем время
+        const date = new Date(msg.created_at);
+        const timeStr = date.toLocaleTimeString('ru-RU', {hour: '2-digit', minute:'2-digit'});
+
+        div.innerHTML = `
+            <div class="text">${escapeHtml(msg.content)}</div>
+            <div class="meta">${timeStr}</div>
+        `;
+        
+        box.appendChild(div);
+    }
+
+    // Хелпер чтобы не поломать верстку скриптами
+    function escapeHtml(text) {
+        if (!text) return text;
+        return text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    function handleKey(event) {
+        if (event.key === 'Enter') sendMessage();
+    }
+</script>
+
+</body>
+</html>
